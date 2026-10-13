@@ -109,6 +109,25 @@ The protected API surface is:
 
 The sample endpoints return empty `200 OK` responses; their purpose is to demonstrate authorization rather than CRUD behavior. `GET /api/routes` lists the protected routes grouped by feature name, with their endpoint names, patterns, and HTTP methods, and is intended for local diagnostics only.
 
+## Using roles in a real-world scenario
+
+To keep the sample simple, permissions are assigned directly to each user through the `Users.Permissions` column. This quickly becomes hard to manage as the number of users grows. For example, granting `people:write` to every editor requires updating every single user.
+
+In a real application, use a classic Role-Based Access Control (RBAC) model. Roles group permissions, and users are assigned roles rather than individual permissions:
+
+```text
+Users --< UserRoles >-- Roles --< RolePermissions
+FeaturePermissions (unchanged)
+```
+
+With this model:
+
+- Endpoints still declare only a feature through `RequirePermission(...)`, and `FeaturePermissions` still maps each feature to its required permissions.
+- At login, the token contains the user's **roles** instead of the full list of permissions, which keeps the token small.
+- The authorization handler resolves the permissions granted to those roles on the server, preferably through a cache such as `HybridCache` or `IMemoryCache` to avoid a database query on every request.
+- Changes to the permissions of a role take effect immediately, without issuing new tokens. Only adding or removing a role from a user still requires a new token.
+
+Roles are used only to group permissions. Endpoints should not check roles directly (for example with `RequireRole("Admin")`), because that would hard-code authorization rules in the application and lose the ability to configure them in the database.
 ## Response behavior
 
 - Missing or invalid bearer tokens produce `401 Unauthorized`.
