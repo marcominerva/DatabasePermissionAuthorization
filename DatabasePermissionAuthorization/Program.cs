@@ -80,7 +80,7 @@ app.MapPut("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
 app.MapDelete("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
     .RequirePermission("People_Delete");
 
-app.MapGet("/debug/routes", (IEnumerable<EndpointDataSource> endpointSources) =>
+app.MapGet("/api/routes", (IEnumerable<EndpointDataSource> endpointSources) =>
 {
     var endpoints = endpointSources.SelectMany(source => source.Endpoints);
     var routes = endpoints.OfType<RouteEndpoint>()
