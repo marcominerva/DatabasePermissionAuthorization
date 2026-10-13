@@ -7,7 +7,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 {
     public DbSet<User> Users { get; set; }
 
-    public DbSet<FeatureScope> FeatureScopes { get; set; }
+    public DbSet<FeaturePermission> FeaturePermissions { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -18,7 +18,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(p => p.Email).IsUnique();
         });
 
-        modelBuilder.Entity<FeatureScope>(e =>
+        modelBuilder.Entity<FeaturePermission>(e =>
         {
             e.Property(p => p.Id).HasDefaultValueSql("NEWSEQUENTIALID()");
 

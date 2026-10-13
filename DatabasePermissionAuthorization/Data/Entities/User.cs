@@ -8,5 +8,5 @@ public class User
 
     public required string Password { get; set; }
 
-    public IList<string> Scopes { get; set; } = [];
+    public IList<string> Permissions { get; set; } = [];
 }

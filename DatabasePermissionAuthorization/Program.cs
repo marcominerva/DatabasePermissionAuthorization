@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using SimpleAuthentication;
 using SimpleAuthentication.JwtBearer;
 using TinyHelpers.AspNetCore.Extensions;
+using TinyHelpers.AspNetCore.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,7 +21,7 @@ builder.Services.AddSqlServer<ApplicationDbContext>(builder.Configuration.GetCon
 
 builder.Services.AddSimpleAuthentication(builder.Configuration);
 
-builder.Services.AddScoped<IAuthorizationHandler, ScopeAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 builder.Services.AddDefaultProblemDetails();
 builder.Services.AddDefaultExceptionHandler();
@@ -28,6 +29,8 @@ builder.Services.AddDefaultExceptionHandler();
 builder.Services.AddOpenApi(options =>
 {
     options.AddSimpleAuthentication(builder.Configuration);
+
+    options.AddDefaultProblemDetailsResponse();
 });
 
 var app = builder.Build();
@@ -58,29 +61,24 @@ app.MapPost("/api/login", async Task<Results<BadRequest, Ok<LoginResponse>>> (Lo
         return TypedResults.BadRequest();
     }
 
-    var token = await jwtBearerService.CreateTokenAsync(user.Email, [new Claim("scp", string.Join(' ', user.Scopes))]);
+    var token = await jwtBearerService.CreateTokenAsync(user.Email, [new Claim(ClaimTypes.UserData, string.Join(' ', user.Permissions))]);
     return TypedResults.Ok(new LoginResponse(token));
 });
 
 app.MapGet("/api/people", () => TypedResults.Ok())
-    .WithName("People_GetAll")
-    .RequireScope();
+    .RequirePermission("People_GetAll");
 
 app.MapGet("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .WithName("People_Get")
-    .RequireScope();
+    .RequirePermission("People_Get");
 
 app.MapPost("/api/people", () => TypedResults.Ok())
-    .WithName("People_Insert")
-    .RequireScope();
+    .RequirePermission("People_Insert");
 
 app.MapPut("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .WithName("People_Update")
-    .RequireScope();
+    .RequirePermission("People_Update");
 
 app.MapDelete("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .WithName("People_Delete")
-    .RequireScope();
+    .RequirePermission("People_Delete");
 
 app.MapGet("/debug/routes", (IEnumerable<EndpointDataSource> endpointSources) =>
 {
@@ -89,8 +87,14 @@ app.MapGet("/debug/routes", (IEnumerable<EndpointDataSource> endpointSources) =>
         .Select(e => new
         {
             Name = e.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName,
+            e.Metadata.GetMetadata<PermissionMetadata>()?.FeatureName,
             Pattern = e.RoutePattern.RawText,
             Methods = e.Metadata.OfType<HttpMethodMetadata>().FirstOrDefault()?.HttpMethods[0]
+        }).Where(e => !string.IsNullOrEmpty(e.FeatureName))
+        .GroupBy(g => g.FeatureName).Select(g => new
+        {
+            FeatureName = g.Key,
+            Routes = g.ToList()
         });
 
     return routes;
@@ -111,22 +115,26 @@ static async Task ConfigureDatabaseAsync(IServiceProvider serviceProvider)
     });
 }
 
-public class ScopeRequirement : IAuthorizationRequirement
+public class PermissionRequirement : IAuthorizationRequirement
 {
-    public static ScopeRequirement Instance { get; } = new();
+    public static PermissionRequirement Instance { get; } = new();
 
-    private ScopeRequirement()
+    private PermissionRequirement()
     {
     }
 }
+
+public record class PermissionMetadata(string FeatureName);
 
 public static class EndpointConventionBuilderExtensions
 {
     extension<TBuilder>(TBuilder builder) where TBuilder : IEndpointConventionBuilder
     {
-        public TBuilder RequireScope()
+        public TBuilder RequirePermission(string featureName)
         {
-            var policy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().AddRequirements(ScopeRequirement.Instance).Build();
+            builder.WithMetadata(new PermissionMetadata(featureName));
+
+            var policy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().AddRequirements(PermissionRequirement.Instance).Build();
             builder.RequireAuthorization(policy);
 
             return builder;
@@ -134,9 +142,9 @@ public static class EndpointConventionBuilderExtensions
     }
 }
 
-public class ScopeAuthorizationHandler(IHttpContextAccessor httpContextAccessor, ApplicationDbContext dbContext) : AuthorizationHandler<ScopeRequirement>
+public class PermissionAuthorizationHandler(IHttpContextAccessor httpContextAccessor, ApplicationDbContext dbContext) : AuthorizationHandler<PermissionRequirement>
 {
-    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, ScopeRequirement requirement)
+    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
     {
         var httpContext = httpContextAccessor.HttpContext;
 
@@ -145,22 +153,22 @@ public class ScopeAuthorizationHandler(IHttpContextAccessor httpContextAccessor,
             return;
         }
 
-        var endpointName = endpoint.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName
+        var featureName = endpoint.Metadata.GetMetadata<PermissionMetadata>()?.FeatureName
             ?? $"{httpContext.Request.Method} {endpoint.RoutePattern.RawText?.TrimStart('/')}";
 
-        var requiredScopes = await dbContext.FeatureScopes.Where(x => x.Name == endpointName)
-            .Select(x => x.Scopes).FirstOrDefaultAsync(httpContext.RequestAborted) ?? [];
+        var requiredPermissions = await dbContext.FeaturePermissions.Where(x => x.Name == featureName)
+            .Select(x => x.Permissions).FirstOrDefaultAsync(httpContext.RequestAborted) ?? [];
 
-        if (requiredScopes.Count == 0)
+        if (requiredPermissions.Count == 0)
         {
             return;
         }
 
-        var grantedScopes = context.User.FindAll(c => c.Type is "scp" or "http://schemas.microsoft.com/identity/claims/scope")
+        var grantedPermissions = context.User.FindAll(c => c.Type == ClaimTypes.UserData)
             .Select(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).SelectMany(s => s)
             .ToHashSet(StringComparer.Ordinal) ?? [];
 
-        if (requiredScopes.Any(grantedScopes.Contains)) // requiredScopes.All(grantedScopes.Contains)
+        if (requiredPermissions.Any(grantedPermissions.Contains)) // requiredPermissions.All(grantedPermissions.Contains)
         {
             context.Succeed(requirement);
         }

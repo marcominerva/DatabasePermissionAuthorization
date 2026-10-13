@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ApplicationScopeSample.Data.Migrations
+namespace DatabasePermissionAuthorization.Data.Migrations
 {
     /// <inheritdoc />
     public partial class Initial : Migration
@@ -12,16 +12,16 @@ namespace ApplicationScopeSample.Data.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
-                name: "FeatureScopes",
+                name: "FeaturePermissions",
                 columns: table => new
                 {
                     Id = table.Column<Guid>(type: "uniqueidentifier", nullable: false, defaultValueSql: "NEWSEQUENTIALID()"),
                     Name = table.Column<string>(type: "nvarchar(450)", nullable: false),
-                    Scopes = table.Column<string>(type: "json", nullable: false)
+                    Permissions = table.Column<string>(type: "json", nullable: false)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_FeatureScopes", x => x.Id);
+                    table.PrimaryKey("PK_FeaturePermissions", x => x.Id);
                 });
 
             migrationBuilder.CreateTable(
@@ -31,7 +31,7 @@ namespace ApplicationScopeSample.Data.Migrations
                     Id = table.Column<Guid>(type: "uniqueidentifier", nullable: false, defaultValueSql: "NEWSEQUENTIALID()"),
                     Email = table.Column<string>(type: "nvarchar(450)", nullable: false),
                     Password = table.Column<string>(type: "nvarchar(max)", nullable: false),
-                    Scopes = table.Column<string>(type: "json", nullable: false)
+                    Permissions = table.Column<string>(type: "json", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -39,8 +39,8 @@ namespace ApplicationScopeSample.Data.Migrations
                 });
 
             migrationBuilder.CreateIndex(
-                name: "IX_FeatureScopes_Name",
-                table: "FeatureScopes",
+                name: "IX_FeaturePermissions_Name",
+                table: "FeaturePermissions",
                 column: "Name",
                 unique: true);
 
@@ -55,7 +55,7 @@ namespace ApplicationScopeSample.Data.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
-                name: "FeatureScopes");
+                name: "FeaturePermissions");
 
             migrationBuilder.DropTable(
                 name: "Users");

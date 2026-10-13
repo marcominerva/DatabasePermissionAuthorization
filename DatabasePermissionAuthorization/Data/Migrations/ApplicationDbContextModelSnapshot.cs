@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace ApplicationScopeSample.Data.Migrations
+namespace DatabasePermissionAuthorization.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
     partial class ApplicationDbContextModelSnapshot : ModelSnapshot
@@ -22,7 +22,7 @@ namespace ApplicationScopeSample.Data.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
-            modelBuilder.Entity("ApplicationScopeSample.Data.Entities.FeatureScope", b =>
+            modelBuilder.Entity("ApplicationScopeSample.Data.Entities.FeaturePermission", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -33,7 +33,7 @@ namespace ApplicationScopeSample.Data.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
 
-                    b.PrimitiveCollection<string>("Scopes")
+                    b.PrimitiveCollection<string>("Permissions")
                         .IsRequired()
                         .HasColumnType("json");
 
@@ -42,7 +42,7 @@ namespace ApplicationScopeSample.Data.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("FeatureScopes");
+                    b.ToTable("FeaturePermissions");
                 });
 
             modelBuilder.Entity("ApplicationScopeSample.Data.Entities.User", b =>
@@ -60,7 +60,7 @@ namespace ApplicationScopeSample.Data.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.PrimitiveCollection<string>("Scopes")
+                    b.PrimitiveCollection<string>("Permissions")
                         .IsRequired()
                         .HasColumnType("json");
 
