@@ -2,15 +2,17 @@
 
 This sample demonstrates database-driven, permission-based authorization with JWT bearer tokens in an ASP.NET Core Minimal API.
 
-The sample stores both the permissions granted to each user and the permissions required by each feature in SQL Server. A custom `AuthorizationHandler` compares the permissions in the authenticated user's token with the permissions configured for the feature associated with the selected endpoint.
+The sample stores both the permissions granted to each user and the permissions required by each feature in SQL Server. The JWT identifies the authenticated user but does not contain permissions. A claims transformation loads the user's current permissions from the database, and a custom `AuthorizationHandler` compares them with the permissions configured for the feature associated with the selected endpoint.
 
 ## How it works
 
 1. `POST /api/login` validates the submitted credentials against the `Users` table.
-2. A successful login returns a JWT containing the user's permissions, separated by spaces, in a `ClaimTypes.UserData` claim.
-3. Protected endpoints call `RequirePermission("FeatureName")`, which attaches a `PermissionMetadata` with the feature name and adds a custom authorization requirement.
-4. `PermissionAuthorizationHandler` reads the feature name from the endpoint metadata and loads its required permissions from `FeaturePermissions`.
-5. Authorization succeeds when the token contains at least one of the required permissions.
+2. A successful login returns a JWT that identifies the user by email; permissions are deliberately not embedded in the token.
+3. After authentication, `PermissionClaimsTransformation` uses the authenticated identity name to load the user from the database.
+4. The transformation adds the user's permissions to the current `ClaimsIdentity` as one space-separated `ClaimTypes.UserData` claim.
+5. Protected endpoints call `RequirePermission("FeatureName")`, which attaches a `PermissionMetadata` with the feature name and adds a custom authorization requirement.
+6. `PermissionAuthorizationHandler` reads the feature name from the endpoint metadata and loads its required permissions from `FeaturePermissions`.
+7. Authorization succeeds when the transformed principal has at least one of the required permissions.
 
 Because endpoints are bound to features rather than to individual routes, multiple endpoints can share the same feature name, and therefore the same set of required permissions.
 
@@ -70,7 +72,17 @@ VALUES
 
 `FeaturePermissions.Name` must match the feature name passed to `RequirePermission(...)`. A protected endpoint whose feature has no matching row, or has an empty permission list, is denied by the custom requirement.
 
-Permissions are included in the token at login time, so changes to a user's permissions take effect only after a new token is issued. Changes to `FeaturePermissions`, instead, are evaluated on every request.
+## Loading permissions with `PermissionClaimsTransformation`
+
+`PermissionClaimsTransformation` implements ASP.NET Core's `IClaimsTransformation` interface and is registered as a scoped service:
+
+```csharp
+builder.Services.AddScoped<IClaimsTransformation, PermissionClaimsTransformation>();
+```
+
+ASP.NET Core invokes the transformation after a request has been authenticated. If the resulting identity is authenticated and has a name, the transformation treats that name as the user's email, retrieves the corresponding `Users` row, and adds the values from `Users.Permissions` to the current identity as a single, space-separated `ClaimTypes.UserData` claim. `PermissionAuthorizationHandler` then reads that claim when evaluating the endpoint requirement.
+
+This keeps authorization data out of the JWT and makes changes to `Users.Permissions` effective on the next authenticated request, without requiring a new token. Changes to `FeaturePermissions` are also evaluated on every protected request. The tradeoff is that the current implementation queries the database during claims transformation and again during permission authorization. A real application should cache these lookups, while choosing an expiration and invalidation strategy that meets its authorization revocation requirements.
 
 Passwords are stored and compared as plain text to keep the authorization example focused. This is not suitable for production; passwords must be salted and hashed with a dedicated password hasher.
 
@@ -128,6 +140,7 @@ With this model:
 - Changes to the permissions of a role take effect immediately, without issuing new tokens. Only adding or removing a role from a user still requires a new token.
 
 Roles are used only to group permissions. Endpoints should not check roles directly (for example with `RequireRole("Admin")`), because that would hard-code authorization rules in the application and lose the ability to configure them in the database.
+
 ## Response behavior
 
 - Missing or invalid bearer tokens produce `401 Unauthorized`.
@@ -136,7 +149,7 @@ Roles are used only to group permissions. Endpoints should not check roles direc
 
 ## Key components
 
-- `Program.cs`: application setup, endpoints, `RequirePermission` extension, `PermissionRequirement`, `PermissionMetadata`, and `PermissionAuthorizationHandler`
+- `Program.cs`: application setup, endpoints, `RequirePermission` extension, `PermissionRequirement`, `PermissionMetadata`, `PermissionClaimsTransformation`, and `PermissionAuthorizationHandler`
 - `Data/ApplicationDbContext.cs`: EF Core model configuration
 - `Data/Entities/User.cs`: credentials and granted permissions
 - `Data/Entities/FeaturePermission.cs`: feature names and required permissions
