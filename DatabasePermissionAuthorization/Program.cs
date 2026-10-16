@@ -1,9 +1,12 @@
 using System.Security.Claims;
-using ApplicationScopeSample.Data;
-using ApplicationScopeSample.Models;
+using DatabasePermissionAuthorization.Data;
+using DatabasePermissionAuthorization.Models;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using SimpleAuthentication;
 using SimpleAuthentication.JwtBearer;
 using TinyHelpers.AspNetCore.Extensions;
@@ -14,13 +17,15 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddHttpContextAccessor();
 
-builder.Services.AddSqlServer<ApplicationDbContext>(builder.Configuration.GetConnectionString("SqlConnection"), options =>
-{
-    options.UseCompatibilityLevel(170);
-});
+builder.Services.AddSqlServer<ApplicationDbContext>(builder.Configuration.GetConnectionString("SqlConnection"),
+    options =>
+    {
+        options.UseCompatibilityLevel(170);
+    });
 
 builder.Services.AddSimpleAuthentication(builder.Configuration);
 
+builder.Services.AddScoped<IClaimsTransformation, PermissionClaimsTransformation>();
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 builder.Services.AddDefaultProblemDetails();
@@ -30,6 +35,7 @@ builder.Services.AddOpenApi(options =>
 {
     options.AddSimpleAuthentication(builder.Configuration);
 
+    options.RemoveServerList();
     options.AddDefaultProblemDetailsResponse();
 });
 
@@ -53,32 +59,35 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapPost("/api/login", async Task<Results<BadRequest, Ok<LoginResponse>>> (LoginRequest loginRequest, ApplicationDbContext dbContext, IJwtBearerService jwtBearerService, CancellationToken cancellationToken) =>
+app.MapPost("/api/login", async Task<Results<BadRequest, Ok<LoginResponse>>> (LoginRequest request, ApplicationDbContext dbContext, IJwtBearerService jwtBearerService,
+    CancellationToken cancellationToken) =>
 {
-    var user = await dbContext.Users.FirstOrDefaultAsync(x => x.Email == loginRequest.Email && x.Password == loginRequest.Password, cancellationToken);
+    var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Email == request.Email && u.Password == request.Password, cancellationToken);
+
     if (user is null)
     {
         return TypedResults.BadRequest();
     }
 
-    var token = await jwtBearerService.CreateTokenAsync(user.Email, [new Claim(ClaimTypes.UserData, string.Join(' ', user.Permissions))]);
+    var token = await jwtBearerService.CreateTokenAsync(user.Email);
+
     return TypedResults.Ok(new LoginResponse(token));
 });
 
 app.MapGet("/api/people", () => TypedResults.Ok())
-    .RequirePermission("People_GetAll");
+    .RequirePermission(featureName: "People_GetAll");
 
 app.MapGet("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .RequirePermission("People_Get");
+    .RequirePermission(featureName: "People_Get");
 
 app.MapPost("/api/people", () => TypedResults.Ok())
-    .RequirePermission("People_Insert");
+    .RequirePermission(featureName: "People_Insert");
 
 app.MapPut("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .RequirePermission("People_Update");
+    .RequirePermission(featureName: "People_Update");
 
 app.MapDelete("/api/people/{id:guid}", (Guid id) => TypedResults.Ok())
-    .RequirePermission("People_Delete");
+    .RequirePermission(featureName: "People_Delete");
 
 app.MapGet("/api/routes", (IEnumerable<EndpointDataSource> endpointSources) =>
 {
@@ -107,14 +116,34 @@ static async Task ConfigureDatabaseAsync(IServiceProvider serviceProvider)
     await using var scope = serviceProvider.CreateAsyncScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-    var strategy = dbContext.Database.CreateExecutionStrategy();
+    await EnsureDatabaseAsync();
+    await RunMigrationsAsync();
 
-    await strategy.ExecuteAsync(async () =>
+    async Task EnsureDatabaseAsync()
     {
-        await dbContext.Database.MigrateAsync();
-    });
-}
+        var dbCreator = dbContext.GetService<IRelationalDatabaseCreator>();
+        var strategy = dbContext.Database.CreateExecutionStrategy();
 
+        await strategy.ExecuteAsync(async () =>
+        {
+            // Create the database if it does not exist.
+            if (!await dbCreator.ExistsAsync())
+            {
+                await dbCreator.CreateAsync();
+            }
+        });
+    }
+
+    async Task RunMigrationsAsync()
+    {
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            await dbContext.Database.MigrateAsync();
+        });
+    }
+}
 public class PermissionRequirement : IAuthorizationRequirement
 {
     public static PermissionRequirement Instance { get; } = new();
@@ -142,6 +171,34 @@ public static class EndpointConventionBuilderExtensions
     }
 }
 
+public class PermissionClaimsTransformation(ApplicationDbContext dbContext) : IClaimsTransformation
+{
+    public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
+    {
+        var identity = principal.Identity as ClaimsIdentity;
+
+        if (identity?.IsAuthenticated == true)
+        {
+            var email = identity.Name;
+            if (email is not null)
+            {
+                // Retrieve the user's permissions from the database.
+                // In a real world application, you might want to cache this information to avoid hitting the database on every request.
+                var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Email == email);
+
+                if (user?.Permissions.Count > 0)
+                {
+                    // Add a single claim with all permissions as a space-separated string.
+                    var permissionsClaim = new Claim(ClaimTypes.UserData, string.Join(' ', user.Permissions));
+                    identity.AddClaim(permissionsClaim);
+                }
+            }
+        }
+
+        return principal;
+    }
+}
+
 public class PermissionAuthorizationHandler(IHttpContextAccessor httpContextAccessor, ApplicationDbContext dbContext) : AuthorizationHandler<PermissionRequirement>
 {
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
@@ -156,20 +213,23 @@ public class PermissionAuthorizationHandler(IHttpContextAccessor httpContextAcce
         var featureName = endpoint.Metadata.GetMetadata<PermissionMetadata>()?.FeatureName
             ?? $"{httpContext.Request.Method} {endpoint.RoutePattern.RawText?.TrimStart('/')}";
 
-        var requiredPermissions = await dbContext.FeaturePermissions.Where(x => x.Name == featureName)
-            .Select(x => x.Permissions).FirstOrDefaultAsync(httpContext.RequestAborted) ?? [];
+        var requiredPermissions = await dbContext.FeaturePermissions
+            .Where(fp => fp.Name == featureName).Select(fp => fp.Permissions)
+            .FirstOrDefaultAsync(httpContext.RequestAborted) ?? [];
 
         if (requiredPermissions.Count == 0)
         {
+            // No permissions defined, block access to the feature.
             return;
         }
 
-        var grantedPermissions = context.User.FindAll(c => c.Type == ClaimTypes.UserData)
-            .Select(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).SelectMany(s => s)
-            .ToHashSet(StringComparer.Ordinal) ?? [];
+        var grantedPermissions = context.User.FindAll(ClaimTypes.UserData)
+            .SelectMany(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet();
 
-        if (requiredPermissions.Any(grantedPermissions.Contains)) // requiredPermissions.All(grantedPermissions.Contains)
+        if (requiredPermissions.Any(grantedPermissions.Contains))   //requiredPermissions.All(grantedPermissions.Contains)
         {
+            // User has at least one of the required permissions, succeed the requirement.
             context.Succeed(requirement);
         }
     }

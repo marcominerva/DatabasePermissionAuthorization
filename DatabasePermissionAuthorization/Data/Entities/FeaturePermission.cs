@@ -1,4 +1,4 @@
-﻿namespace ApplicationScopeSample.Data.Entities;
+﻿namespace DatabasePermissionAuthorization.Data.Entities;
 
 public class FeaturePermission
 {

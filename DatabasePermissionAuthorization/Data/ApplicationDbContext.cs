@@ -1,7 +1,7 @@
-﻿using ApplicationScopeSample.Data.Entities;
+﻿using DatabasePermissionAuthorization.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 
-namespace ApplicationScopeSample.Data;
+namespace DatabasePermissionAuthorization.Data;
 
 public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : DbContext(options)
 {
